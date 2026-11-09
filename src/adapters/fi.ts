@@ -77,7 +77,6 @@ export const fiAdapter: CompanyAdapter = {
   id: 'fi',
   source: SOURCE,
   countries: ['FI'],
-  via: 'direct',
   requiredEnv: [],
   async search(query, signal) {
     const url = `${ENDPOINT}?name=${encodeURIComponent(query)}`;

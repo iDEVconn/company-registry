@@ -29,24 +29,13 @@ export interface CompanyAdapter {
   source: string;
   /** ISO alpha-2 codes served by this adapter. Empty for the global fallback. */
   countries: readonly string[];
-  /** `direct` calls the registry from the browser, `proxy` goes through the dev proxy. */
-  via: 'direct' | 'proxy';
-  /** Server-side env variables the adapter needs. Empty for keyless registries. */
+  /** Environment variables that hold this adapter's credentials. Empty for keyless registries. */
   requiredEnv: readonly string[];
-  /** `country` is the ISO alpha-2 code chosen in the form. Per-country adapters ignore it; the global fallback filters by it. */
+  /** `country` is the ISO alpha-2 code being searched. Per-country adapters ignore it; the global fallback filters by it. */
   search(query: string, signal?: AbortSignal, country?: string): Promise<CompanyCandidate[]>;
 }
 
-/** Contract of `GET /registry/capabilities`: which proxied registries are usable and which env variables are missing. */
+/** Which keyed registries are usable and which env variables are missing. Names only, never values. */
 export interface RegistryCapabilities {
   adapters: Record<string, { available: boolean; missingEnv: string[] }>;
-}
-
-/** Options shared by the adapters that reach their registry through a proxy (the Vite plugin or your own gateway). */
-export interface ProxyAdapterOptions {
-  /**
-   * URL prefix the adapter calls, without a trailing slash. Defaults to the Vite plugin's path
-   * (`/registry/<adapter id>`). Point it at your gateway, for example `https://api.example.com/registry/gb`.
-   */
-  basePath?: string;
 }

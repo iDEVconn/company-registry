@@ -76,7 +76,6 @@ export const noAdapter: CompanyAdapter = {
   id: 'no',
   source: SOURCE,
   countries: ['NO'],
-  via: 'direct',
   requiredEnv: [],
   async search(query, signal) {
     const url = `${ENDPOINT}?navn=${encodeURIComponent(query)}&size=${LIMIT}`;

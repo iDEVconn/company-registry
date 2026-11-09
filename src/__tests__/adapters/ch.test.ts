@@ -1,6 +1,8 @@
 import { afterEach, vi } from 'vitest';
-import { chAdapter } from '../../adapters/ch';
+import { createChAdapter } from '../../adapters/ch';
 import { NASTY_NAME, stubFetch } from './test-utils';
+
+const chAdapter = createChAdapter({ username: 'user', password: 'pass' });
 
 const firm = (overrides: Record<string, unknown> = {}) => ({
   name: 'Bit Solutions AG',
@@ -14,8 +16,29 @@ const firm = (overrides: Record<string, unknown> = {}) => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe('chAdapter', () => {
-  it('goes through the dev proxy and needs the Zefix credentials', () => {
-    expect(chAdapter).toMatchObject({ via: 'proxy', requiredEnv: ['ZEFIX_USERNAME', 'ZEFIX_PASSWORD'] });
+  it('posts to Zefix directly with Basic auth', async () => {
+    const fetchMock = stubFetch([]);
+
+    await chAdapter.search('bit');
+
+    expect(fetchMock.mock.calls[0]?.[0]).toBe('https://www.zefix.admin.ch/ZefixPublicREST/api/v1/company/search');
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).toEqual({
+      'Content-Type': 'application/json',
+      Authorization: `Basic ${Buffer.from('user:pass').toString('base64')}`,
+    });
+  });
+
+  it('refuses to be created without both credentials', () => {
+    expect(() => createChAdapter({ username: 'user', password: '' })).toThrow(
+      expect.objectContaining({ code: 'misconfigured' }),
+    );
+    expect(() => createChAdapter({ username: '', password: 'pass' })).toThrow(
+      expect.objectContaining({ code: 'misconfigured' }),
+    );
+  });
+
+  it('rejects a too short name as an invalid request', async () => {
+    await expect(chAdapter.search('bi')).rejects.toEqual(expect.objectContaining({ code: 'invalid-request' }));
   });
 
   it('maps an active company', async () => {
@@ -79,13 +102,13 @@ describe('chAdapter', () => {
     await expect(chAdapter.search('bit')).rejects.toThrow(/rate limit/i);
   });
 
-  it('posts a begins-with search to the proxy path without mangling special characters', async () => {
+  it('posts a begins-with search without mangling special characters', async () => {
     const fetchMock = stubFetch([]);
 
     await chAdapter.search(NASTY_NAME);
 
     const [url, init] = fetchMock.mock.calls[0] ?? [];
-    expect(url).toBe('/registry/ch/api/v1/company/search');
+    expect(url).toBe('https://www.zefix.admin.ch/ZefixPublicREST/api/v1/company/search');
     expect(init).toMatchObject({ method: 'POST' });
     expect(JSON.parse(String(init?.body))).toEqual({ name: `${NASTY_NAME}*`, activeOnly: false });
   });

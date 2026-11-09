@@ -54,7 +54,6 @@ export const czAdapter: CompanyAdapter = {
   id: 'cz',
   source: SOURCE,
   countries: ['CZ'],
-  via: 'direct',
   requiredEnv: [],
   async search(query, signal) {
     const body = { obchodniJmeno: query, start: 0, pocet: LIMIT };

@@ -1,6 +1,8 @@
 import { afterEach, vi } from 'vitest';
-import { nzAdapter } from '../../adapters/nz';
+import { createNzAdapter } from '../../adapters/nz';
 import { NASTY_NAME, requestedUrl, stubFetch } from './test-utils';
+
+const nzAdapter = createNzAdapter({ apiKey: 'test-key' });
 
 const entity = (overrides: Record<string, unknown> = {}) => ({
   nzbn: '9429041234567',
@@ -14,8 +16,17 @@ const entity = (overrides: Record<string, unknown> = {}) => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe('nzAdapter', () => {
-  it('goes through the dev proxy and needs the NZBN key', () => {
-    expect(nzAdapter).toMatchObject({ via: 'proxy', requiredEnv: ['NZBN_API_KEY'] });
+  it('calls NZBN directly with the subscription key header', async () => {
+    const fetchMock = stubFetch({ items: [] });
+
+    await nzAdapter.search('wix');
+
+    expect(requestedUrl(fetchMock).startsWith('https://api.business.govt.nz/gateway/nzbn/v5/entities?')).toBe(true);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).toEqual({ 'Ocp-Apim-Subscription-Key': 'test-key' });
+  });
+
+  it('refuses to be created without a key', () => {
+    expect(() => createNzAdapter({ apiKey: '' })).toThrow(expect.objectContaining({ code: 'misconfigured' }));
   });
 
   it('maps a registered entity', async () => {
@@ -67,13 +78,13 @@ describe('nzAdapter', () => {
     await expect(nzAdapter.search('wix')).rejects.toThrow(/rate limit/i);
   });
 
-  it('calls the proxy path and url-encodes special and non-Latin characters', async () => {
+  it('url-encodes special and non-Latin characters', async () => {
     const fetchMock = stubFetch({ items: [] });
 
     await nzAdapter.search(NASTY_NAME);
 
     const url = requestedUrl(fetchMock);
-    expect(url.startsWith('/registry/nz/entities?')).toBe(true);
+    expect(url.startsWith('https://api.business.govt.nz/gateway/nzbn/v5/entities?')).toBe(true);
     expect(url).toContain(`search-term=${encodeURIComponent(NASTY_NAME)}`);
   });
 });

@@ -1,5 +1,6 @@
-import type { z } from 'zod';
-import type { CompanyCandidate } from '../types';
+import type { z } from "zod";
+import { CompanyRegistryError } from "../errors";
+import type { CompanyCandidate } from "../types";
 
 export const REQUEST_TIMEOUT_MS = 15_000;
 
@@ -7,8 +8,9 @@ const unexpected = (source: string) =>
   `${source} returned an unexpected response. Try again or fill in the details manually.`;
 
 /**
- * One request with a timeout. Failures become messages a manager can act on: raw `Failed to fetch`,
- * JSON syntax errors and zod dumps never reach the UI. A caller abort passes through as `AbortError`.
+ * One request with a timeout. Every failure becomes a {@link CompanyRegistryError} with a readable message. The
+ * message never contains the URL or headers, so a credential travelling in either cannot leak through an error.
+ * A caller abort passes through unchanged as `AbortError`.
  */
 async function request<T>(
   url: string,
@@ -22,7 +24,7 @@ async function request<T>(
 
   const forwardAbort = () => controller.abort(caller?.reason);
   if (caller?.aborted) forwardAbort();
-  else caller?.addEventListener('abort', forwardAbort, { once: true });
+  else caller?.addEventListener("abort", forwardAbort, { once: true });
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
@@ -31,37 +33,66 @@ async function request<T>(
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
     if (response.status === 429) {
-      throw new Error(`${source} rate limit reached. Try again in a minute.`);
+      throw new CompanyRegistryError("rate-limited", source, `${source} rate limit reached. Try again in a minute.`, {
+        status: 429,
+      });
     }
     if (!response.ok) {
-      throw new Error(`${source} request failed: ${response.status}`);
+      throw new CompanyRegistryError("http-error", source, `${source} request failed: ${response.status}`, {
+        status: response.status,
+      });
     }
     return await read(response);
   } catch (error) {
-    if (timedOut) throw new Error(`${source} did not answer in time. Try again.`, { cause: error });
-    if ((error as { name?: string } | null)?.name === 'AbortError') throw error;
-    if (error instanceof SyntaxError) throw new Error(unexpected(source), { cause: error });
+    if (error instanceof CompanyRegistryError) throw error;
+    if (timedOut) {
+      throw new CompanyRegistryError("timeout", source, `${source} did not answer in time. Try again.`, {
+        cause: error,
+      });
+    }
+    if ((error as { name?: string } | null)?.name === "AbortError") throw error;
+    if (error instanceof SyntaxError) {
+      throw new CompanyRegistryError("bad-response", source, unexpected(source), { cause: error });
+    }
     if (error instanceof TypeError) {
-      throw new Error(`${source} could not be reached. Check your connection and try again.`, { cause: error });
+      throw new CompanyRegistryError(
+        "unreachable",
+        source,
+        `${source} could not be reached. Check your connection and try again.`,
+        { cause: error },
+      );
     }
     throw error;
   } finally {
     clearTimeout(timer);
-    caller?.removeEventListener('abort', forwardAbort);
+    caller?.removeEventListener("abort", forwardAbort);
   }
 }
 
+type Headers = Record<string, string>;
+
 /** GET a JSON document. */
-export function getJson(url: string, source: string, signal?: AbortSignal): Promise<unknown> {
-  return request(url, source, { signal }, (response) => response.json() as Promise<unknown>);
+export function getJson(url: string, source: string, signal?: AbortSignal, headers?: Headers): Promise<unknown> {
+  return request(url, source, { signal, ...(headers ? { headers } : {}) }, (response) => response.json() as Promise<unknown>);
 }
 
-/** POST a JSON body and read a JSON answer. Only for registries whose read-only search is a POST (for example ARES). */
-export function postJson(url: string, body: unknown, source: string, signal?: AbortSignal): Promise<unknown> {
+/** POST a JSON body and read a JSON answer. Only for registries whose read-only search is a POST. */
+export function postJson(
+  url: string,
+  body: unknown,
+  source: string,
+  signal?: AbortSignal,
+  headers?: Headers,
+): Promise<unknown> {
   return request(
     url,
     source,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal },
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify(body),
+      signal,
+    },
     (response) => response.json() as Promise<unknown>,
   );
 }
@@ -70,7 +101,7 @@ export function postJson(url: string, body: unknown, source: string, signal?: Ab
 export function getJsonp(url: string, source: string, signal?: AbortSignal): Promise<unknown> {
   return request(url, source, { signal }, async (response) => {
     const match = /^[\w$.]+\(([\s\S]*)\);?$/.exec((await response.text()).trim());
-    if (!match?.[1]) throw new SyntaxError('not JSONP');
+    if (!match?.[1]) throw new SyntaxError("not JSONP");
     return JSON.parse(match[1]) as unknown;
   });
 }
@@ -80,7 +111,7 @@ export function parseEnvelope<T extends z.ZodType>(schema: T, data: unknown, sou
   const result = schema.safeParse(data);
   if (!result.success) {
     console.warn(`${source}: unexpected response shape`, result.error.issues);
-    throw new Error(unexpected(source));
+    throw new CompanyRegistryError("bad-response", source, unexpected(source));
   }
   return result.data;
 }
@@ -96,7 +127,9 @@ export function mapRows<T>(
 ): CompanyCandidate[] {
   const mapped = rows.map(toCandidate).filter((candidate): candidate is CompanyCandidate => candidate !== null);
   if (rows.length > 0 && mapped.length === 0) {
-    throw new Error(
+    throw new CompanyRegistryError(
+      "bad-response",
+      source,
       `${source} returned ${rows.length} results but none could be read; the response mapping may be out of date.`,
     );
   }
@@ -105,13 +138,8 @@ export function mapRows<T>(
 
 /** Collapse runs of whitespace and trim. Returns undefined for empty input. */
 export function clean(value: unknown): string | undefined {
-  if (typeof value === 'number') return String(value);
-  if (typeof value !== 'string') return undefined;
-  const text = value.replace(/\s+/g, ' ').trim();
-  return text === '' ? undefined : text;
-}
-
-/** Strips trailing slashes so `base + "/path"` never doubles them. */
-export function joinBase(base: string): string {
-  return base.replace(/\/+$/, '');
+  if (typeof value === "number") return String(value);
+  if (typeof value !== "string") return undefined;
+  const text = value.replace(/\s+/g, " ").trim();
+  return text === "" ? undefined : text;
 }

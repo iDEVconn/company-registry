@@ -1,6 +1,8 @@
 import { afterEach, vi } from 'vitest';
-import { auAdapter } from '../../adapters/au';
+import { createAuAdapter } from '../../adapters/au';
 import { NASTY_NAME, requestedUrl, stubFetch } from './test-utils';
+
+const auAdapter = createAuAdapter({ guid: 'test-guid' });
 
 const name = (overrides: Record<string, unknown> = {}) => ({
   Abn: '51824753556',
@@ -19,8 +21,26 @@ const jsonp = (payload: unknown) => `callback(${JSON.stringify(payload)})`;
 afterEach(() => vi.unstubAllGlobals());
 
 describe('auAdapter', () => {
-  it('goes through the dev proxy and needs the ABN Lookup GUID', () => {
-    expect(auAdapter).toMatchObject({ via: 'proxy', requiredEnv: ['ABN_LOOKUP_GUID'] });
+  it('calls ABN Lookup directly with the GUID in the query', async () => {
+    const fetchMock = stubFetch(jsonp({ Message: '', Names: [] }));
+
+    await auAdapter.search('wix');
+
+    const url = requestedUrl(fetchMock);
+    expect(url.startsWith('https://abr.business.gov.au/json/MatchingNames.aspx?')).toBe(true);
+    expect(url).toContain('guid=test-guid');
+  });
+
+  it('refuses to be created without a GUID', () => {
+    expect(() => createAuAdapter({ guid: '' })).toThrow(expect.objectContaining({ code: 'misconfigured' }));
+  });
+
+  it('never leaks the GUID through an error', async () => {
+    stubFetch('', { ok: false, status: 500 });
+
+    const error = await auAdapter.search('wix').catch((e: unknown) => e);
+
+    expect(String(error)).not.toContain('test-guid');
   });
 
   it('unwraps the JSONP answer and maps an active entity', async () => {
@@ -78,14 +98,13 @@ describe('auAdapter', () => {
     await expect(auAdapter.search('wix')).rejects.toThrow(/rate limit/i);
   });
 
-  it('calls the proxy path and url-encodes special and non-Latin characters', async () => {
+  it('url-encodes special and non-Latin characters', async () => {
     const fetchMock = stubFetch(jsonp({ Message: '', Names: [] }));
 
     await auAdapter.search(NASTY_NAME);
 
     const url = requestedUrl(fetchMock);
-    expect(url.startsWith('/registry/au/json/MatchingNames.aspx?')).toBe(true);
+    expect(url.startsWith('https://abr.business.gov.au/json/MatchingNames.aspx?')).toBe(true);
     expect(url).toContain(`name=${encodeURIComponent(NASTY_NAME)}`);
-    expect(url).not.toContain('guid');
   });
 });

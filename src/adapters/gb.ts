@@ -1,14 +1,16 @@
 import { z } from 'zod';
-import type { CompanyAdapter, CompanyCandidate, ProxyAdapterOptions } from '../types';
-import { clean, getJson, mapRows, parseEnvelope, joinBase } from './http';
+import type { CompanyAdapter, CompanyCandidate } from '../types';
+import { clean, getJson, mapRows, parseEnvelope } from './http';
+import { basicAuth, joinBase, requireCredential } from './auth';
 
 // Registry: Companies House (UK), Public Data API `GET /search/companies`.
-// Name search: yes (`q`). Key: COMPANIES_HOUSE_API_KEY (HTTP Basic, key as username). The API does not allow
-// browser calls, so this goes through the dev proxy. Statuses follow the Companies House `company_status` enumeration.
+// Name search: yes (`q`). Key: COMPANIES_HOUSE_API_KEY (HTTP Basic, key as username). Server-side only: the API
+// does not allow browser calls. Statuses follow the Companies House `company_status` enumeration.
 // NOTE: written from the official swagger and enumerations; not smoke-tested against the live API (no key in CI).
 const SOURCE = 'Companies House (UK)';
 const ACTIVE = new Set(['active', 'open', 'registered']);
 const ITEMS_PER_PAGE = 100;
+const DEFAULT_BASE_URL = 'https://api.company-information.service.gov.uk';
 
 const text = z.string().nullish();
 
@@ -66,24 +68,27 @@ function toCandidate(item: Item): CompanyCandidate | null {
   };
 }
 
-/**
- * Creates the adapter. By default it calls the Vite plugin's proxy path (`/registry/gb`); pass `basePath`
- * to call your own gateway instead.
- */
-export function createGbAdapter(options: ProxyAdapterOptions = {}): CompanyAdapter {
-  const base = joinBase(options.basePath ?? '/registry/gb');
-  return {
-  id: 'gb',
-  source: SOURCE,
-  countries: ['GB'],
-  via: 'proxy',
-  requiredEnv: ['COMPANIES_HOUSE_API_KEY'],
-  async search(query, signal) {
-    const url = `${base}/search/companies?q=${encodeURIComponent(query)}&items_per_page=${ITEMS_PER_PAGE}`;
-    const parsed = parseEnvelope(envelope, await getJson(url, SOURCE, signal), SOURCE);
-    return mapRows(parsed.items ?? [], toCandidate, SOURCE);
-  },
-  };
+export interface GbAdapterOptions {
+  /** Companies House API key. */
+  apiKey: string;
+  /** Defaults to the official API host. */
+  baseUrl?: string;
 }
 
-export const gbAdapter = createGbAdapter();
+/** Creates the adapter. Throws `misconfigured` when the key is missing. */
+export function createGbAdapter(options: GbAdapterOptions): CompanyAdapter {
+  const apiKey = requireCredential(SOURCE, 'apiKey', options.apiKey);
+  const base = joinBase(options.baseUrl ?? DEFAULT_BASE_URL);
+  const headers = { Authorization: basicAuth(apiKey) };
+  return {
+    id: 'gb',
+    source: SOURCE,
+    countries: ['GB'],
+    requiredEnv: ['COMPANIES_HOUSE_API_KEY'],
+    async search(query, signal) {
+      const url = `${base}/search/companies?q=${encodeURIComponent(query)}&items_per_page=${ITEMS_PER_PAGE}`;
+      const parsed = parseEnvelope(envelope, await getJson(url, SOURCE, signal, headers), SOURCE);
+      return mapRows(parsed.items ?? [], toCandidate, SOURCE);
+    },
+  };
+}

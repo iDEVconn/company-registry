@@ -23,7 +23,7 @@
       "vitest/globals",
       "node"
     ],
-    "jsx": "react-jsx"
+    "experimentalDecorators": true
   },
   "include": [
     "src"

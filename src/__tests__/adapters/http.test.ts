@@ -1,6 +1,7 @@
 import { afterEach, vi } from 'vitest';
 import { z } from 'zod';
-import { getJson, getJsonp, mapRows, parseEnvelope } from '../../adapters/http';
+import { CompanyRegistryError } from '../../errors';
+import { getJson, getJsonp, mapRows, parseEnvelope, postJson } from '../../adapters/http';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -116,5 +117,98 @@ describe('mapRows', () => {
     expect(() => mapRows(['', ''], toCandidate, 'Test registry')).toThrow(
       'Test registry returned 2 results but none could be read; the response mapping may be out of date.',
     );
+  });
+});
+
+describe("typed errors", () => {
+  const code = (c: string) => expect.objectContaining({ name: "CompanyRegistryError", code: c, source: "Test registry" });
+
+  it("marks a timeout", async () => {
+    vi.useFakeTimers();
+    hangingFetch();
+
+    const outcome = expect(getJson("/x", "Test registry")).rejects.toEqual(code("timeout"));
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await outcome;
+  });
+
+  it("marks an unreachable registry", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+
+    await expect(getJson("/x", "Test registry")).rejects.toEqual(code("unreachable"));
+  });
+
+  it("marks a rate limit with its status", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 429 }));
+
+    await expect(getJson("/x", "Test registry")).rejects.toEqual(
+      expect.objectContaining({ code: "rate-limited", status: 429 }),
+    );
+  });
+
+  it("marks any other HTTP failure with its status", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+
+    await expect(getJson("/x", "Test registry")).rejects.toEqual(
+      expect.objectContaining({ code: "http-error", status: 503 }),
+    );
+  });
+
+  it("marks an answer that is not what the registry promises", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected token <");
+        },
+      }),
+    );
+
+    await expect(getJson("/x", "Test registry")).rejects.toEqual(code("bad-response"));
+    expect(() => parseEnvelope(z.object({ a: z.string() }), {}, "Test registry")).toThrow(
+      expect.objectContaining({ code: "bad-response" }),
+    );
+    expect(() =>
+      mapRows([1], () => null, "Test registry"),
+    ).toThrow(expect.objectContaining({ code: "bad-response" }));
+  });
+
+  it("is an Error with a readable message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 503 }));
+
+    const error = await getJson("/x", "Test registry").catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toBeInstanceOf(CompanyRegistryError);
+    expect((error as Error).message).toBe("Test registry request failed: 503");
+  });
+
+  it("never puts the request URL, and so a secret in it, into the error", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+
+    const error = await getJson("https://registry.example/search?api_token=SUPER-SECRET", "Test registry").catch(
+      (e: unknown) => e,
+    );
+
+    expect(String(error)).not.toContain("SUPER-SECRET");
+  });
+});
+
+describe("request headers", () => {
+  it("sends the headers on GET and POST", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getJson("/x", "Test registry", undefined, { Authorization: "Basic abc" });
+    await postJson("/y", { a: 1 }, "Test registry", undefined, { "X-Key": "k" });
+
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).toEqual({ Authorization: "Basic abc" });
+    expect((fetchMock.mock.calls[1]?.[1] as RequestInit).headers).toEqual({
+      "Content-Type": "application/json",
+      "X-Key": "k",
+    });
   });
 });

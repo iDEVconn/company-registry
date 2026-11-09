@@ -66,7 +66,6 @@ export const frAdapter: CompanyAdapter = {
   id: 'fr',
   source: SOURCE,
   countries: ['FR'],
-  via: 'direct',
   requiredEnv: [],
   async search(query, signal) {
     const url = `${ENDPOINT}?q=${encodeURIComponent(query)}&per_page=${PER_PAGE}`;

@@ -1,6 +1,9 @@
 import { afterEach, vi } from 'vitest';
-import { gbAdapter } from '../../adapters/gb';
+import { createGbAdapter } from '../../adapters/gb';
+import { CompanyRegistryError } from '../../errors';
 import { NASTY_NAME, requestedUrl, stubFetch } from './test-utils';
+
+const gbAdapter = createGbAdapter({ apiKey: 'test-key' });
 
 const item = (overrides: Record<string, unknown> = {}) => ({
   company_number: '12718529',
@@ -20,8 +23,32 @@ const item = (overrides: Record<string, unknown> = {}) => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe('gbAdapter', () => {
-  it('goes through the dev proxy and needs the Companies House key', () => {
-    expect(gbAdapter).toMatchObject({ via: 'proxy', requiredEnv: ['COMPANIES_HOUSE_API_KEY'] });
+  it('calls Companies House directly with the key as Basic auth', async () => {
+    const fetchMock = stubFetch({ items: [] });
+
+    await gbAdapter.search('bit');
+
+    expect(requestedUrl(fetchMock).startsWith('https://api.company-information.service.gov.uk/search/companies?')).toBe(true);
+    expect((fetchMock.mock.calls[0]?.[1] as RequestInit).headers).toEqual({
+      Authorization: `Basic ${Buffer.from('test-key:').toString('base64')}`,
+    });
+  });
+
+  it('refuses to be created without a key', () => {
+    expect(() => createGbAdapter({ apiKey: '  ' })).toThrow(expect.objectContaining({ code: 'misconfigured' }));
+    expect(() => createGbAdapter({ apiKey: '  ' })).toThrow(CompanyRegistryError);
+  });
+
+  it('can target another base URL', async () => {
+    const fetchMock = stubFetch({ items: [] });
+
+    await createGbAdapter({ apiKey: 'k', baseUrl: 'http://localhost:9000/' }).search('bit');
+
+    expect(requestedUrl(fetchMock).startsWith('http://localhost:9000/search/companies?')).toBe(true);
+  });
+
+  it('keeps the key out of its own description', () => {
+    expect(JSON.stringify({ ...gbAdapter, search: undefined })).not.toContain('test-key');
   });
 
   it('maps an active company', async () => {
@@ -92,13 +119,13 @@ describe('gbAdapter', () => {
     await expect(gbAdapter.search('saiga')).rejects.toThrow(/rate limit/i);
   });
 
-  it('calls the proxy path and url-encodes special and non-Latin characters', async () => {
+  it('url-encodes special and non-Latin characters', async () => {
     const fetchMock = stubFetch({ items: [] });
 
     await gbAdapter.search(NASTY_NAME);
 
     const url = requestedUrl(fetchMock);
-    expect(url.startsWith('/registry/gb/search/companies?')).toBe(true);
+    expect(url.startsWith('https://api.company-information.service.gov.uk/search/companies?')).toBe(true);
     expect(url).toContain(`q=${encodeURIComponent(NASTY_NAME)}`);
   });
 });

@@ -1,6 +1,8 @@
 import { afterEach, vi } from 'vitest';
-import { ocAdapter } from '../../adapters/oc';
+import { createOcAdapter } from '../../adapters/oc';
 import { NASTY_NAME, requestedUrl, stubFetch } from './test-utils';
+
+const ocAdapter = createOcAdapter({ apiToken: 'test-token' });
 
 const company = (overrides: Record<string, unknown> = {}) => ({
   company: {
@@ -26,12 +28,12 @@ const results = (...companies: unknown[]) => ({ results: { companies } });
 afterEach(() => vi.unstubAllGlobals());
 
 describe('ocAdapter', () => {
-  it('serves the US, Canada and Poland through the dev proxy and needs the token', () => {
-    expect(ocAdapter).toMatchObject({
-      via: 'proxy',
-      countries: ['US', 'CA', 'PL'],
-      requiredEnv: ['OPENCORPORATES_API_TOKEN'],
-    });
+  it('serves the US, Canada and Poland', () => {
+    expect(ocAdapter.countries).toEqual(['US', 'CA', 'PL']);
+  });
+
+  it('refuses to be created without a token', () => {
+    expect(() => createOcAdapter({ apiToken: ' ' })).toThrow(expect.objectContaining({ code: 'misconfigured' }));
   });
 
   it('maps an active company', async () => {
@@ -100,15 +102,23 @@ describe('ocAdapter', () => {
     await expect(ocAdapter.search('bit', undefined, 'US')).rejects.toThrow(/rate limit/i);
   });
 
-  it('filters by the lower-case country code, never sends the token, and url-encodes the name', async () => {
+  it('calls OpenCorporates directly, filters by the lower-case country code and url-encodes the name', async () => {
     const fetchMock = stubFetch(results());
 
     await ocAdapter.search(NASTY_NAME, undefined, 'PL');
 
     const url = requestedUrl(fetchMock);
-    expect(url.startsWith('/registry/oc/companies/search?')).toBe(true);
+    expect(url.startsWith('https://api.opencorporates.com/v0.4/companies/search?')).toBe(true);
     expect(url).toContain(`q=${encodeURIComponent(NASTY_NAME)}`);
     expect(url).toContain('country_code=pl');
-    expect(url).not.toContain('api_token');
+    expect(url).toContain('api_token=test-token');
+  });
+
+  it('never leaks the token through an error', async () => {
+    stubFetch({}, { ok: false, status: 500 });
+
+    const error = await ocAdapter.search('bit', undefined, 'US').catch((e: unknown) => e);
+
+    expect(String(error)).not.toContain('test-token');
   });
 });

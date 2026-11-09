@@ -65,7 +65,6 @@ export const ilAdapter: CompanyAdapter = {
   id: 'il',
   source: SOURCE,
   countries: ['IL'],
-  via: 'direct',
   requiredEnv: [],
   async search(query, signal) {
     const url = `${ENDPOINT}?resource_id=${RESOURCE_ID}&q=${encodeURIComponent(query)}&limit=${LIMIT}`;

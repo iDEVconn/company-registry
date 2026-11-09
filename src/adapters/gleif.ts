@@ -72,7 +72,6 @@ export const gleifAdapter: CompanyAdapter = {
   id: 'gleif',
   source: SOURCE,
   countries: [],
-  via: 'direct',
   requiredEnv: [],
   async search(query, signal, country) {
     const params = [`filter[fulltext]=${encodeURIComponent(query)}`, `page[size]=${PAGE_SIZE}`];
