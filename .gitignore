@@ -21,3 +21,6 @@ coverage
 ruvector.db
 agentdb.rvf
 agentdb.rvf.lock
+
+# local release/CI logs
+.release-log.txt
