@@ -1,0 +1,23 @@
+node_modules
+dist
+coverage
+.DS_Store
+*.tsbuildinfo
+
+# editor
+.vscode
+.idea
+
+# env
+.env
+.env.local
+
+# local agent-tooling state (not part of this package)
+.claude
+.claude-flow
+.remember
+.superpowers
+.swarm/
+ruvector.db
+agentdb.rvf
+agentdb.rvf.lock
